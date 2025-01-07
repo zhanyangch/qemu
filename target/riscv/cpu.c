@@ -2798,6 +2798,9 @@ static const Property riscv_cpu_properties[] = {
      * it with -x and default to 'false'.
      */
     DEFINE_PROP_BOOL("x-misa-w", RISCVCPU, cfg.misa_w, false),
+
+    DEFINE_PROP_BOOL("iopmp", RISCVCPU, cfg.iopmp, false),
+    DEFINE_PROP_UINT32("iopmp_rrid", RISCVCPU, cfg.iopmp_rrid, 0),
 };
 
 #if defined(TARGET_RISCV64)
