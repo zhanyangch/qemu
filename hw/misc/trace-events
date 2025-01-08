@@ -384,3 +384,7 @@ ivshmem_flat_read_write_mmr_invalid(uint64_t addr_offset) "No ivshmem register m
 ivshmem_flat_interrupt_invalid_peer(uint16_t peer_id) "Can't interrupt non-existing peer %u"
 ivshmem_flat_write_mmr(uint64_t addr_offset) "Write access at offset %"PRIu64
 ivshmem_flat_interrupt_peer(uint16_t peer_id, uint16_t vector_id) "Interrupting peer ID %u, vector %u..."
+
+# riscv_iopmp.c
+iopmp_read(uint64_t addr, uint32_t val) "addr 0x%"PRIx64" val 0x%x"
+iopmp_write(uint64_t addr, uint32_t val) "addr 0x%"PRIx64" val 0x%x"
