@@ -49,7 +49,7 @@ static void riscv_iopmp_dispatcher_realize(DeviceState *dev, Error **errp)
                             TYPE_RISCV_IOPMP_DISP_SS);
 }
 
-static Property iopmp_dispatcher_properties[] = {
+static const Property iopmp_dispatcher_properties[] = {
     DEFINE_PROP_UINT32("stage-num", RISCVIOPMPDispState, stage_num, 2),
     DEFINE_PROP_UINT32("target-num", RISCVIOPMPDispState, target_num, 10),
 };
