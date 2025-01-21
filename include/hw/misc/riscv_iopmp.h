@@ -183,7 +183,7 @@ typedef struct RISCVIOPMPState {
     bool enable;
 } RISCVIOPMPState;
 
-DeviceState *iopmp_create(hwaddr addr, qemu_irq irq);
+DeviceState *iopmp_create(hwaddr addr, qemu_irq irq, int id);
 void iopmp_setup_system_memory(DeviceState *dev, const MemMapEntry *memmap,
                                uint32_t mapentry_num, uint32_t stage);
 void iopmp_setup_sink(DeviceState *dev, StreamSink * ss);

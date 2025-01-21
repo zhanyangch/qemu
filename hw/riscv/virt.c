@@ -59,6 +59,7 @@
 #include "hw/virtio/virtio-iommu.h"
 #include "hw/misc/riscv_iopmp.h"
 #include "hw/misc/riscv_iopmp_dispatcher.h"
+#include "hw/dma/iopmp_dma.h"
 
 /* KVM AIA only supports APLIC MSI. APLIC Wired is always emulated by QEMU. */
 static bool virt_use_kvm_aia_aplic_imsic(RISCVVirtAIAType aia_type)
@@ -96,7 +97,9 @@ static const MemMapEntry virt_memmap[] = {
     [VIRT_UART0] =        { 0x10000000,         0x100 },
     [VIRT_VIRTIO] =       { 0x10001000,        0x1000 },
     [VIRT_FW_CFG] =       { 0x10100000,          0x18 },
-    [VIRT_IOPMP] =        { 0x10200000,      0x100000 },
+    [VIRT_IOPMP0] =       { 0x10200000,      0x100000 },
+    [VIRT_IOPMP1] =       { 0x10300000,      0x100000 },
+    [VIRT_DMA]   =        { 0x10400000,         0x100 },
     [VIRT_FLASH] =        { 0x20000000,     0x4000000 },
     [VIRT_IMSIC_M] =      { 0x24000000, VIRT_IMSIC_MAX_SIZE },
     [VIRT_IMSIC_S] =      { 0x28000000, VIRT_IMSIC_MAX_SIZE },
@@ -105,8 +108,16 @@ static const MemMapEntry virt_memmap[] = {
     [VIRT_DRAM] =         { 0x80000000,           0x0 },
 };
 
-static const MemMapEntry iopmp_protect_memmap[] = {
+static const MemMapEntry iopmp0_protect_memmap[] = {
     /* IOPMP protect all regions by default */
+    {0x0, 0xFFFFFFFF},
+    {0x0, 0x83FFFFFF},
+    {0x0, 0xFFFFFFFF},
+};
+
+static const MemMapEntry iopmp1_protect_memmap[] = {
+    {0x0, 0x0},
+    {0x84000000, 0x7BFFFFFF},
     {0x0, 0xFFFFFFFF},
 };
 
@@ -1130,11 +1141,11 @@ static void create_fdt_iopmp(RISCVVirtState *s, const MemMapEntry *memmap,
     g_autofree char *name = NULL;
     MachineState *ms = MACHINE(s);
 
-    name = g_strdup_printf("/soc/iopmp@%lx", (long)memmap[VIRT_IOPMP].base);
+    name = g_strdup_printf("/soc/iopmp@%lx", (long)memmap[VIRT_IOPMP0].base);
     qemu_fdt_add_subnode(ms->fdt, name);
     qemu_fdt_setprop_string(ms->fdt, name, "compatible", "riscv_iopmp");
-    qemu_fdt_setprop_cells(ms->fdt, name, "reg", 0x0, memmap[VIRT_IOPMP].base,
-        0x0, memmap[VIRT_IOPMP].size);
+    qemu_fdt_setprop_cells(ms->fdt, name, "reg", 0x0, memmap[VIRT_IOPMP0].base,
+        0x0, memmap[VIRT_IOPMP0].size);
     qemu_fdt_setprop_cell(ms->fdt, name, "interrupt-parent", irq_mmio_phandle);
     if (s->aia_type == VIRT_AIA_TYPE_NONE) {
         qemu_fdt_setprop_cell(ms->fdt, name, "interrupts", IOPMP_IRQ);
@@ -1559,7 +1570,11 @@ static void virt_machine_init(MachineState *machine)
     DeviceState *mmio_irqchip, *virtio_irqchip, *pcie_irqchip;
     int i, base_hartid, hart_count;
     int socket_count = riscv_socket_count(machine);
-    DeviceState *iopmp_dev, *iopmp_disp_dev;
+
+    DeviceState *iopmp_dev0 = NULL;
+    DeviceState *iopmp_dev1 = NULL;
+    DeviceState *iopmp_disp_dev = NULL;
+    DeviceState *iopmpdma_dev;
     StreamSink *iopmp_ss, *iopmp_disp_ss;
 
     /* Check socket count limit */
@@ -1743,26 +1758,73 @@ static void virt_machine_init(MachineState *machine)
     virt_flash_map(s, system_memory);
 
     if (s->have_iopmp) {
-        iopmp_dev = iopmp_create(memmap[VIRT_IOPMP].base,
-            qdev_get_gpio_in(DEVICE(mmio_irqchip), IOPMP_IRQ));
+        iopmp_dev0 = iopmp_create(memmap[VIRT_IOPMP0].base,
+            qdev_get_gpio_in(DEVICE(mmio_irqchip), IOPMP_IRQ), 0);
 
-        iopmp_setup_system_memory(iopmp_dev, &iopmp_protect_memmap[0], 1, 0);
+        if (s->iopmp_layout > 0) {
+            iopmp_dev1 = iopmp_create(memmap[VIRT_IOPMP1].base,
+                qdev_get_gpio_in(DEVICE(mmio_irqchip), IOPMP_IRQ), 1);
+        }
+
+        /* DMA device to demonstrate IOPMP */
+        iopmpdma_dev = iopmpdma_create(memmap[VIRT_DMA].base,
+            qdev_get_gpio_in(DEVICE(mmio_irqchip), DMA_IRQ));
+
+        if (s->iopmp_layout == 1) {
+            iopmp_setup_system_memory(iopmp_dev1,
+                                      &iopmp1_protect_memmap[s->iopmp_layout],
+                                      1, 0);
+        }
+        if (s->iopmp_layout == 2) {
+            iopmp_setup_system_memory(iopmp_dev1,
+                                      &iopmp1_protect_memmap[s->iopmp_layout],
+                                      1, 1);
+        }
+        iopmp_setup_system_memory(iopmp_dev0,
+                                  &iopmp0_protect_memmap[s->iopmp_layout], 1,
+                                  0);
 
         iopmp_disp_dev = qdev_new(TYPE_RISCV_IOPMP_DISP);
         qdev_prop_set_uint32(DEVICE(iopmp_disp_dev), "target-num", 1);
         qdev_prop_set_uint32(DEVICE(iopmp_disp_dev), "stage-num", 1);
+        if (s->iopmp_layout == 2) {
+            qdev_prop_set_uint32(DEVICE(iopmp_disp_dev), "stage-num", 2);
+        } else if (s->iopmp_layout == 1) {
+            qdev_prop_set_uint32(DEVICE(iopmp_disp_dev), "target-num", 2);
+            qdev_prop_set_uint32(DEVICE(iopmp_disp_dev), "stage-num", 1);
+        }
         qdev_realize(DEVICE(iopmp_disp_dev), NULL, &error_fatal);
 
         /* Add memmap inforamtion to dispatcher */
-        iopmp_ss = (StreamSink *)&(RISCV_IOPMP(iopmp_dev)->txn_info_sink);
+        iopmp_ss = (StreamSink *)&(RISCV_IOPMP(iopmp_dev0)->txn_info_sink);
         iopmp_dispatcher_add_target(DEVICE(iopmp_disp_dev), iopmp_ss,
-                                    iopmp_protect_memmap[0].base,
-                                    iopmp_protect_memmap[0].size,
+                                    iopmp0_protect_memmap[0].base,
+                                    iopmp0_protect_memmap[0].size,
                                     0, 0);
+
+        /* Add memmap inforamtion to dispatcher for iopmp_dev1 */
+        if (s->iopmp_layout == 1) {
+            iopmp_ss = (StreamSink *)&(RISCV_IOPMP(iopmp_dev1)->txn_info_sink);
+            iopmp_dispatcher_add_target(DEVICE(iopmp_disp_dev),
+                iopmp_ss,
+                iopmp1_protect_memmap[s->iopmp_layout].base,
+                iopmp1_protect_memmap[s->iopmp_layout].size,
+                0, 1);
+        } else if (s->iopmp_layout == 2) {
+            iopmp_ss = (StreamSink *)&(RISCV_IOPMP(iopmp_dev1)->txn_info_sink);
+            iopmp_dispatcher_add_target(DEVICE(iopmp_disp_dev),
+                iopmp_ss,
+                iopmp1_protect_memmap[s->iopmp_layout].base,
+                iopmp1_protect_memmap[s->iopmp_layout].size,
+                1, 0);
+        }
 
         iopmp_disp_ss =
             (StreamSink *)&(RISCV_IOPMP_DISP(iopmp_disp_dev)->txn_info_sink);
-        iopmp_setup_sink(iopmp_dev, iopmp_disp_ss);
+        iopmp_setup_sink(iopmp_dev0, iopmp_disp_ss);
+
+        /* DMA will send transaction information to iopmp_disp_ss */
+        iopmpdma_setup_sink(iopmpdma_dev, iopmp_disp_ss);
     }
 
     /* load/create device tree */
@@ -1914,6 +1976,36 @@ static void virt_set_iopmp(Object *obj, bool value, Error **errp)
     s->have_iopmp = value;
 }
 
+static void virt_get_iopmp_layout(Object *obj, Visitor *v,
+                                  const char *name, void *opaque,
+                                  Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+
+    uint32_t value = s->iopmp_layout;
+
+    visit_type_uint32(v, name, &value, errp);
+}
+
+static void virt_set_iopmp_layout(Object *obj, Visitor *v,
+                                  const char *name, void *opaque,
+                                  Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    uint32_t value;
+
+    if (!visit_type_uint32(v, name, &value, errp)) {
+        return;
+    }
+
+    if (value > 2) {
+        error_setg(errp, "Invalid number of iopmp layout");
+        error_append_hint(errp, "Valid values be between 0 and 2");
+    }
+
+    s->iopmp_layout = value;
+}
+
 bool virt_is_acpi_enabled(RISCVVirtState *s)
 {
     return s->acpi != ON_OFF_AUTO_OFF;
@@ -2047,6 +2139,21 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
     object_class_property_set_description(oc, "iopmp",
                                           "Set on/off to enable/disable "
                                           "iopmp device");
+    /* Provide default layouts for iopmp */
+    object_class_property_add(oc, "iopmp-layout", "uint32_t",
+                              virt_get_iopmp_layout, virt_set_iopmp_layout,
+                              NULL, NULL);
+    object_class_property_set_description(oc, "iopmp-layout",
+                                          "Set 0/1/2 to use diffenet iopmp"
+                                          "layout.\n"
+                                          "0: IOPMP0 checks address "
+                                          "0x0 ~ 0xFFFFFFFF region.\n"
+                                          "1: IOPMP0 checks address"
+                                          "0x0 ~ 0x84000000 and IOPMP1 checks"
+                                          "address 0x84000000 ~ 0xFFFFFFFF.\n"
+                                          "2: IOPMP0 checks address"
+                                          "0x0 ~ 0xFFFFFFFF and then send to"
+                                          "IOPMP1 with rrid_transl.\n");
 }
 
 static const TypeInfo virt_machine_typeinfo = {

@@ -2026,6 +2026,15 @@ static void iopmp_class_init(ObjectClass *klass, void *data)
     rc->phases.hold = iopmp_reset_hold;
 }
 
+static void iopmp_child_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
+    dc->realize = iopmp_realize;
+    rc->phases.enter = iopmp_reset_enter;
+    rc->phases.hold = iopmp_reset_hold;
+}
+
 static void iopmp_init(Object *obj)
 {
     RISCVIOPMPState *s = RISCV_IOPMP(obj);
@@ -2042,15 +2051,40 @@ static const TypeInfo iopmp_info = {
     .class_init = iopmp_class_init,
 };
 
+/* Specify different configuration of iopmp property by global config */
+static const TypeInfo iopmp0_info = {
+    .name = "riscv-iopmp0",
+    .parent = TYPE_RISCV_IOPMP,
+    .instance_size = sizeof(RISCVIOPMPState),
+    .instance_init = iopmp_init,
+    .class_init = iopmp_child_class_init,
+};
+
+static const TypeInfo iopmp1_info = {
+    .name = "riscv-iopmp1",
+    .parent = TYPE_RISCV_IOPMP,
+    .instance_size = sizeof(RISCVIOPMPState),
+    .instance_init = iopmp_init,
+    .class_init = iopmp_child_class_init,
+};
+
 static const TypeInfo iopmp_iommu_memory_region_info = {
     .name = TYPE_RISCV_IOPMP_IOMMU_MEMORY_REGION,
     .parent = TYPE_IOMMU_MEMORY_REGION,
     .class_init = iopmp_iommu_memory_region_class_init,
 };
 
-DeviceState *iopmp_create(hwaddr addr, qemu_irq irq)
+DeviceState *iopmp_create(hwaddr addr, qemu_irq irq, int id)
 {
-    DeviceState *dev = qdev_new(TYPE_RISCV_IOPMP);
+    DeviceState *dev;
+    if (id == 0) {
+        dev = qdev_new("riscv-iopmp0");
+    } else if (id == 1) {
+        dev = qdev_new("riscv-iopmp1");
+    } else {
+        dev = qdev_new(TYPE_RISCV_IOPMP);
+    }
+
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
@@ -2177,6 +2211,9 @@ static void iopmp_register_types(void)
     type_register_static(&iopmp_info);
     type_register_static(&txn_info_sink);
     type_register_static(&iopmp_iommu_memory_region_info);
+
+    type_register_static(&iopmp0_info);
+    type_register_static(&iopmp1_info);
 }
 
 type_init(iopmp_register_types);
